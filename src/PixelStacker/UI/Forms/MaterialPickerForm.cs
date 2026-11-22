@@ -10,6 +10,7 @@ using System.Data;
 using System.Linq;
 using System.Windows.Forms;
 using PixelStacker.Logic.Extensions;
+using System.ComponentModel;
 using System.Threading.Tasks;
 using SkiaSharp;
 
@@ -21,6 +22,7 @@ namespace PixelStacker.UI.Forms
         private MaterialCombination _selectedCombo = null;
         private Options Options;
 
+        [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
         public MaterialCombination SelectedCombo
         {
             get => this._selectedCombo;
@@ -127,8 +129,8 @@ namespace PixelStacker.UI.Forms
         {
             this.InitializeTabs();
             var needle = tbxMaterialFilter.Text.ToLowerInvariant();
-            await this.SetSearchFilterAsync(needle, this.pnlBottomMats, GetImageButtonData_Lower());
-            await this.SetSearchFilterAsync(needle, this.pnlTopMats, GetImageButtonData_Upper());
+            await this.SetSearchFilterAsync(needle, this.pnlBottomMats, _allLowerTiles);
+            await this.SetSearchFilterAsync(needle, this.pnlTopMats, _allUpperTiles);
         }
 
         private void MaterialPickerForm_Disposed(object sender, EventArgs e)
@@ -279,8 +281,8 @@ namespace PixelStacker.UI.Forms
             {
                 filterNeedsRefresh = false;
                 var needle = tbxMaterialFilter.Text.ToLowerInvariant();
-                await this.SetSearchFilterAsync(needle, this.pnlBottomMats, GetImageButtonData_Lower());
-                await this.SetSearchFilterAsync(needle, this.pnlTopMats, GetImageButtonData_Upper());
+                await this.SetSearchFilterAsync(needle, this.pnlBottomMats, _allLowerTiles);
+                await this.SetSearchFilterAsync(needle, this.pnlTopMats, _allUpperTiles);
             }
         }
     }

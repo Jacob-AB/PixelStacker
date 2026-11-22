@@ -2,6 +2,7 @@
 using PixelStacker.Logic.IO.Config;
 using PixelStacker.Logic.Model;
 using System;
+using System.ComponentModel;
 using System.Drawing;
 using System.Windows.Forms;
 
@@ -9,8 +10,36 @@ namespace PixelStacker.WF.Components
 {
     public partial class MaterialSelectTile : UserControl
     {
-        public Material Material { get; set; } = null;
+        private Material _material;
+        private Bitmap _cachedBitmap;
+        private bool _cachedIsSideView;
+
+        [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+        public Material Material
+        {
+            get => _material;
+            set
+            {
+                if (_material == value) return;
+                _material = value;
+                _cachedBitmap?.Dispose();
+                _cachedBitmap = null;
+            }
+        }
+
+        [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
         public Options Opts { get; set; } = null;
+
+        private Bitmap GetCachedBitmap(bool isv)
+        {
+            if (_cachedBitmap == null || _cachedIsSideView != isv)
+            {
+                _cachedBitmap?.Dispose();
+                _cachedBitmap = _material.GetImage(isv).SKBitmapToBitmap();
+                _cachedIsSideView = isv;
+            }
+            return _cachedBitmap;
+        }
 
         public MaterialSelectTile()
         {
@@ -37,7 +66,7 @@ namespace PixelStacker.WF.Components
 
             if (this.Material != null)
             {
-                using var img = this.Material.GetImage(isv).SKBitmapToBitmap();
+                var img = GetCachedBitmap(isv);
                 g.DrawImage(img, 0, 0, this.Width, this.Height);
                 g.DrawRectangle(penShadow, 0, 0, this.Width, this.Height);
 

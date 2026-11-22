@@ -1,12 +1,15 @@
-﻿using System;
+﻿using Microsoft.Extensions.Configuration;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
-using System.Linq;
-using System.Collections.Generic;
-using System.IO;
-using System.Xml;
-using Google.Cloud.Translation.V2;
 using Newtonsoft.Json;
-using Microsoft.Extensions.Configuration;
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using System.Linq;
+using System.Threading.Tasks;
+using System.Xml;
+using OpenAI;
+using OpenAI.Chat;
 
 namespace PixelStacker.CodeGenerator
 {
@@ -14,12 +17,12 @@ namespace PixelStacker.CodeGenerator
     [TestClass]
     public class JsonResxMaker
     {
-        private string GOOGLE_API_KEY = "";
+        private readonly Translator _translator;
         private string RootDir = AppDomain.CurrentDomain.BaseDirectory.Split(new string[] { "\\PixelStacker.CodeGenerator\\bin\\" }, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
         private string[] OutputLocales = new string[] {
             "da-dk", "de-de", "es-es", "fr-fr",
             "it-it", "ja-jp", "ko-kr", "nl-nl",
-            "sv-se", "zh-cn", "zu-zu"
+            "ru-ru", "sv-se", "zh-cn", "zu-zu"
         };
 
         public JsonResxMaker()
@@ -27,7 +30,7 @@ namespace PixelStacker.CodeGenerator
             var config = new ConfigurationBuilder()
                 .AddUserSecrets<JsonResxMaker>()
                 .Build();
-            GOOGLE_API_KEY = config["GOOGLE_API_KEY"];
+            _translator = new Translator(config["OPENAI_API_KEY"]);
         }
 
 
@@ -36,13 +39,13 @@ namespace PixelStacker.CodeGenerator
         /// </summary>
         [TestMethod]
         [TestCategory("Generators")]
-        public void Text_Translate()
+        public async Task Text_Translate()
         {
-            RipResxIntoJson($@"{RootDir}\PixelStacker.Resources\Text.resx");
+            await RipResxIntoJsonAsync($@"{RootDir}\PixelStacker.Resources\Text.resx");
         }
 
 
-        private void RipResxIntoJson(string filePath)
+        private async Task RipResxIntoJsonAsync(string filePath)
         {
             #region SWAP designer code
             {
@@ -69,7 +72,9 @@ namespace PixelStacker.CodeGenerator
                 return false;
             });
 
-            File.WriteAllText(enJsonFilePath, JsonConvert.SerializeObject(keys, new JsonSerializerSettings()
+            foreach (var kvp in keys) parsedEnglishKeys[kvp.Key] = kvp.Value;
+            foreach (var kvp in keysToBeRemoved.ToList()) parsedEnglishKeys.Remove(kvp.Key);
+            File.WriteAllText(enJsonFilePath, JsonConvert.SerializeObject(parsedEnglishKeys.OrderBy(k => k.Key).ToDictionary(k => k.Key, v => v.Value), new JsonSerializerSettings()
             {
                 Formatting = Newtonsoft.Json.Formatting.Indented
             }));
@@ -97,17 +102,25 @@ namespace PixelStacker.CodeGenerator
                 var keysToBeTranslatedForCurrentLocale = keys.Where(enKvp => !parsed.ContainsKey(enKvp.Key)).ToDictionary(k => k.Key, v => v.Value);
                 foreach (var kvp in keysToBeAdded) { keysToBeTranslatedForCurrentLocale[kvp.Key] = kvp.Value; }
 
+                string targetLangName = new CultureInfo(locale).EnglishName;
                 foreach (var kvp in keysToBeTranslatedForCurrentLocale)
                 {
-                    string translated = GetTranslatedText(kvp.Value, lang);
+                    string translated = await _translator.TranslateAsync(kvp.Value, "English", targetLangName);
                     parsed[kvp.Key] = translated;
                 }
 
-                File.WriteAllText(jsonFilePath, JsonConvert.SerializeObject(parsed, new JsonSerializerSettings()
+                File.WriteAllText(jsonFilePath, JsonConvert.SerializeObject(parsed.OrderBy(k => k.Key).ToDictionary(k => k.Key, v => v.Value), new JsonSerializerSettings()
                 {
                     Formatting = Newtonsoft.Json.Formatting.Indented
                 }));
             }
+
+            // Touch ResxContainer.resx so MSBuild's GenerateResource task re-embeds the updated
+            // locale JSON files. Without this, incremental builds skip re-embedding because
+            // ResxContainer.resx's timestamp hasn't changed, even though the JSON files it
+            // references have.
+            string resxContainerPath = RootDir + "\\PixelStacker.Resources\\Localization\\ResxContainer.resx";
+            File.SetLastWriteTimeUtc(resxContainerPath, DateTime.UtcNow);
         }
 
         protected static Dictionary<string, string> ReadResxIntoDictionary(string resxFilePath)
@@ -136,11 +149,50 @@ namespace PixelStacker.CodeGenerator
             return kvps;
         }
 
-        private string GetTranslatedText(string text, string localeCode)
+    }
+
+    public class Translator
+    {
+        private readonly ChatClient _chat;
+
+        public Translator(string openAiApiKey)
         {
-            TranslationClient client = TranslationClient.CreateFromApiKey(apiKey: GOOGLE_API_KEY);
-            TranslationResult result = client.TranslateText(text, localeCode.Substring(0, 2).ToLower());
-            return result.TranslatedText;
+            if (string.IsNullOrEmpty(openAiApiKey))
+            {
+                throw new InvalidOperationException("Missing OPENAI_API_KEY in user secrets.");
+            }
+
+            var api = new OpenAIClient(openAiApiKey);
+            _chat = api.GetChatClient("gpt-4o-mini");
+        }
+
+        /// <summary>
+        /// Translates text from one language to another using the official OpenAI SDK.
+        /// Use "auto" for sourceLang if you don't know the source language.
+        /// </summary>
+        public async Task<string> TranslateAsync(string text, string sourceLang, string targetLang)
+        {
+            List<ChatMessage> messages =
+            [
+                new SystemChatMessage($"Translate from {sourceLang} to {targetLang}. Keep the same tone and emotion. Output only translation."),
+                new SystemChatMessage($"Do not translate URLs."),
+                new UserChatMessage(text),
+            ];
+
+            ChatCompletionOptions options = new()
+            {
+                ResponseFormat = ChatResponseFormat.CreateTextFormat()
+            };
+
+            ChatCompletion completion = await _chat.CompleteChatAsync(messages, options);
+
+            string trans = completion.Content[0].Text;
+            if (trans.Contains("sorry") || trans.Contains("I'm sorry, but I can't assist with that."))
+            {
+                Console.WriteLine("Translation failed or was not possible.");
+            }
+
+            return trans;
         }
     }
 }
